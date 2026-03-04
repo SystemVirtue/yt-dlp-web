@@ -23,7 +23,11 @@ def validate_url(url: str) -> str:
 @app.get("/info")
 async def get_info(url: str = Query(...)):
     validate_url(url)
-    ydl_opts = {"quiet": True, "no_warnings": True}
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "cookies": "/app/cookies.txt",          # ← must be here
+    }   
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             info = ydl.extract_info(url, download=False)
