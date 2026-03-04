@@ -68,7 +68,7 @@ async def download(url: str = Query(...), format_id: str = Query("best", alias="
         return StreamingResponse(
             iterfile(),
             media_type=media_type,
-            headers={"Content-Disposition": f"attachment; filename={path.name}"}
+            headers={"Content-Disposition": f'attachment; filename="{path.name.replace(chr(34), "_")}"'}
         )
     except HTTPException:
         shutil.rmtree(temp_dir, ignore_errors=True)
