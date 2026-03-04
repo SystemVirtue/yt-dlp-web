@@ -87,6 +87,25 @@ async def download(url: str = Query(...), format_id: str = Query("best", alias="
         raise HTTPException(500, detail=str(e))
 
 
+@app.get("/debug-cookies")
+async def debug_cookies():
+    import os
+  
+    path = "/app/cookies.txt"
+    if not os.path.exists(path):
+        return {"status": "missing", "path": path}
+    try:
+        with open(path, "r") as f:
+            first_lines = f.readlines()[:5]
+        return {
+            "status": "exists",
+            "size": os.path.getsize(path),
+            "first_lines": first_lines,
+            "readable": os.access(path, os.R_OK)
+        }
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+        
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
