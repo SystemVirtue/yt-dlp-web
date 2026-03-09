@@ -1,14 +1,22 @@
 from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 import yt_dlp
+import httpx
 import tempfile
 import os
 import shutil
 import mimetypes
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
 app = FastAPI()
+
+
+@app.get("/")
+async def health():
+    """Health-check endpoint – pinged by cron-job.org to keep the free-tier instance awake."""
+    return {"status": "ok"}
 
 
 def validate_url(url: str) -> str:
@@ -36,8 +44,11 @@ async def get_info(url: str = Query(...)):
             raise HTTPException(400, detail=str(e))
 
 
+DEFAULT_FORMAT = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
+
+
 @app.get("/download")
-async def download(url: str = Query(...), format_id: str = Query("best", alias="format")):
+async def download(url: str = Query(...), format_id: str = Query(DEFAULT_FORMAT, alias="format")):
     validate_url(url)
 
     temp_dir = tempfile.mkdtemp()
@@ -45,6 +56,7 @@ async def download(url: str = Query(...), format_id: str = Query("best", alias="
 
     ydl_opts = {
         "format": format_id,
+        "merge_output_format": "mp4",
         "outtmpl": outtmpl,
         "quiet": True,
         "no_warnings": True,
@@ -87,6 +99,51 @@ async def download(url: str = Query(...), format_id: str = Query("best", alias="
         raise HTTPException(500, detail=str(e))
 
 
+@app.get("/thumbnail")
+async def thumbnail(url: str = Query(...)):
+    """Return the video thumbnail image. Uses yt-dlp to find the best thumbnail URL, then proxies it."""
+    validate_url(url)
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "cookies": "/app/cookies.txt",
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        raise HTTPException(400, detail=str(e))
+
+    thumb_url = info.get("thumbnail")
+    if not thumb_url:
+        thumbnails = info.get("thumbnails") or []
+        if thumbnails:
+            thumb_url = thumbnails[-1].get("url")
+    if not thumb_url:
+        raise HTTPException(404, detail="No thumbnail found for this video.")
+
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        resp = await client.get(thumb_url, timeout=15)
+        if resp.status_code != 200:
+            raise HTTPException(502, detail="Failed to fetch thumbnail from upstream.")
+
+    content_type = resp.headers.get("content-type", "image/jpeg")
+    ext = "jpg"
+    if "png" in content_type:
+        ext = "png"
+    elif "webp" in content_type:
+        ext = "webp"
+
+    title = re.sub(r'[^\w\s-]', '', info.get("title", "thumbnail")).strip()
+    filename = f"{title}.{ext}"
+
+    return Response(
+        content=resp.content,
+        media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
 @app.get("/debug-cookies")
 async def debug_cookies():
     import os
@@ -108,4 +165,5 @@ async def debug_cookies():
         
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
