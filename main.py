@@ -167,22 +167,61 @@ async def thumbnail(url: str = Query(...)):
     )
 
 
-@app.get("/debug-cookies")
-async def debug_cookies():
-    if not os.path.exists(COOKIES_PATH):
-        return {"status": "missing", "path": COOKIES_PATH}
-    try:
-        with open(COOKIES_PATH, "r") as f:
-            first_lines = f.readlines()[:5]
-        return {
+@app.get("/debug")
+async def debug():
+    """Full diagnostic: cookies, Node.js, bgutil plugin, and a test extraction."""
+    import subprocess
+    import importlib
+
+    result = {}
+
+    # 1. Cookies status
+    if os.path.exists(COOKIES_PATH):
+        result["cookies"] = {
             "status": "exists",
             "size": os.path.getsize(COOKIES_PATH),
-            "first_lines": first_lines,
-            "readable": os.access(COOKIES_PATH, os.R_OK),
             "source": "env" if os.environ.get("YOUTUBE_COOKIES") else "file",
         }
+    else:
+        result["cookies"] = {"status": "missing"}
+
+    # 2. Node.js
+    try:
+        node_ver = subprocess.check_output(["node", "--version"], stderr=subprocess.STDOUT, timeout=5).decode().strip()
+        result["nodejs"] = {"status": "ok", "version": node_ver}
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        result["nodejs"] = {"status": "error", "detail": str(e)}
+
+    # 3. yt-dlp version
+    result["yt_dlp_version"] = yt_dlp.version.__version__
+
+    # 4. bgutil plugin loaded?
+    try:
+        from yt_dlp_plugins.extractor import getpot_bgutil
+        result["bgutil_plugin"] = {"status": "loaded"}
+    except ImportError as e:
+        result["bgutil_plugin"] = {"status": "not_loaded", "detail": str(e)}
+
+    # 5. Test extraction (metadata only, no download)
+    test_url = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+    ydl_opts = {
+        "quiet": False,
+        "no_warnings": False,
+        "verbose": True,
+        **_cookies_opt(),
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(test_url, download=False)
+            result["test_extract"] = {
+                "status": "ok",
+                "title": info.get("title"),
+                "formats_count": len(info.get("formats", [])),
+            }
+    except Exception as e:
+        result["test_extract"] = {"status": "error", "detail": str(e)}
+
+    return result
 
 
 if __name__ == "__main__":
