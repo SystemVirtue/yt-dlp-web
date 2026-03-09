@@ -2,4 +2,4 @@ fastapi
 uvicorn
 yt-dlp
 httpx
-# python-multipart  if file uploads needed
+bgutil-ytdlp-pot-provider
