@@ -26,11 +26,17 @@ def write_cookies_from_env():
         print("Warning: No cookies available. YouTube downloads may fail.")
 
 
-def _cookies_opt():
-    """Return cookies option dict if cookies file exists."""
+def _base_opts():
+    """Return shared yt-dlp options: cookies, proxy, and extractor args."""
+    opts = {}
     if os.path.exists(COOKIES_PATH):
-        return {"cookies": COOKIES_PATH}
-    return {}
+        opts["cookies"] = COOKIES_PATH
+    proxy = os.environ.get("YT_PROXY", "").strip()
+    if proxy:
+        opts["proxy"] = proxy
+    # Tell yt-dlp to use the bgutil PO token provider for YouTube
+    opts["extractor_args"] = {"youtube": ["player_client=web", "po_token=web+bgutil"]}
+    return opts
 
 
 app = FastAPI()
@@ -57,7 +63,7 @@ async def get_info(url: str = Query(...)):
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        **_cookies_opt(),
+        **_base_opts(),
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
@@ -84,7 +90,7 @@ async def download(url: str = Query(...), format_id: str = Query(DEFAULT_FORMAT,
         "quiet": True,
         "no_warnings": True,
         "continuedl": True,
-        **_cookies_opt(),
+        **_base_opts(),
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "referer": "https://www.youtube.com/",
         "sleep_interval": 3,
@@ -129,7 +135,7 @@ async def thumbnail(url: str = Query(...)):
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        **_cookies_opt(),
+        **_base_opts(),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -169,46 +175,65 @@ async def thumbnail(url: str = Query(...)):
 
 @app.get("/debug")
 async def debug():
-    """Full diagnostic: cookies, Node.js, bgutil plugin, and a test extraction."""
+    """Full diagnostic: cookies, Node.js, bgutil plugin, proxy, and a test extraction."""
     import subprocess
-    import importlib
+    import io
+    import logging
 
     result = {}
 
-    # 1. Cookies status
+    # 1. Cookies status + validity check
     if os.path.exists(COOKIES_PATH):
+        with open(COOKIES_PATH, "r") as f:
+            cookie_lines = f.readlines()
+        youtube_cookies = [l.strip() for l in cookie_lines if ".youtube.com" in l and not l.startswith("#")]
+        cookie_names = [l.split("\t")[-2] if "\t" in l else "" for l in youtube_cookies]
         result["cookies"] = {
             "status": "exists",
             "size": os.path.getsize(COOKIES_PATH),
             "source": "env" if os.environ.get("YOUTUBE_COOKIES") else "file",
+            "youtube_cookie_count": len(youtube_cookies),
+            "has_sapisid": any("SAPISID" in n for n in cookie_names),
+            "has_login": any("LOGIN_INFO" in n for n in cookie_names),
+            "cookie_names": cookie_names[:20],
         }
     else:
         result["cookies"] = {"status": "missing"}
 
-    # 2. Node.js
+    # 2. Proxy
+    proxy = os.environ.get("YT_PROXY", "").strip()
+    result["proxy"] = {"status": "configured", "value": proxy[:30] + "..." if len(proxy) > 30 else proxy} if proxy else {"status": "not_set"}
+
+    # 3. Node.js
     try:
         node_ver = subprocess.check_output(["node", "--version"], stderr=subprocess.STDOUT, timeout=5).decode().strip()
         result["nodejs"] = {"status": "ok", "version": node_ver}
     except Exception as e:
         result["nodejs"] = {"status": "error", "detail": str(e)}
 
-    # 3. yt-dlp version
+    # 4. yt-dlp version
     result["yt_dlp_version"] = yt_dlp.version.__version__
 
-    # 4. bgutil plugin loaded?
+    # 5. bgutil plugin check
     try:
         from yt_dlp_plugins.extractor import getpot_bgutil
-        result["bgutil_plugin"] = {"status": "loaded"}
+        result["bgutil_plugin"] = {"status": "loaded", "module": str(getpot_bgutil)}
     except ImportError as e:
         result["bgutil_plugin"] = {"status": "not_loaded", "detail": str(e)}
 
-    # 5. Test extraction (metadata only, no download)
+    # 6. Test extraction with verbose logging captured
     test_url = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+    log_buffer = io.StringIO()
+    handler = logging.StreamHandler(log_buffer)
+    handler.setLevel(logging.DEBUG)
+    yt_logger = logging.getLogger("yt-dlp")
+    yt_logger.addHandler(handler)
+
     ydl_opts = {
         "quiet": False,
         "no_warnings": False,
         "verbose": True,
-        **_cookies_opt(),
+        **_base_opts(),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -220,6 +245,13 @@ async def debug():
             }
     except Exception as e:
         result["test_extract"] = {"status": "error", "detail": str(e)}
+    finally:
+        yt_logger.removeHandler(handler)
+        log_output = log_buffer.getvalue()
+        # Include relevant log lines (PO token, plugin, error mentions)
+        relevant = [l for l in log_output.split("\n") if any(k in l.lower() for k in ["pot", "token", "bgutil", "plugin", "error", "sign in", "bot"])]
+        result["yt_dlp_log_relevant"] = relevant[:30] if relevant else ["no relevant log lines captured"]
+        result["yt_dlp_log_lines_total"] = log_output.count("\n")
 
     return result
 
