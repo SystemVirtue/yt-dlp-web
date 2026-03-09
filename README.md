@@ -12,8 +12,26 @@ A lightweight web API for downloading media via [yt-dlp](https://github.com/yt-d
 |--------|------|-------------|
 | `GET` | `/` | Health check – returns `{"status": "ok"}` |
 | `GET` | `/info?url=<URL>` | Fetch video metadata (title, duration, formats) |
-| `GET` | `/download?url=<URL>&format=<FMT>` | Download media as a streamed file |
+| `GET` | `/download?url=<URL>&format=<FMT>` | Download media as a streamed MP4 file (default: 720p) |
+| `GET` | `/thumbnail?url=<URL>` | Returns the video thumbnail image |
 | `GET` | `/debug-cookies` | Debug the cookies.txt file inside the container |
+
+### Examples
+
+**Download 720p MP4** (default — no `format` param needed):
+```
+https://web-dlp-api.onrender.com/download?url=https://www.youtube.com/watch?v=VIDEO_ID
+```
+
+**Download with custom format:**
+```
+https://web-dlp-api.onrender.com/download?url=https://www.youtube.com/watch?v=VIDEO_ID&format=bestvideo[height<=1080]+bestaudio/best
+```
+
+**Get thumbnail:**
+```
+https://web-dlp-api.onrender.com/thumbnail?url=https://www.youtube.com/watch?v=VIDEO_ID
+```
 
 ---
 
