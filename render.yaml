@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: web-dlp-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: oregon
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: "10000"

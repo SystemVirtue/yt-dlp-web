@@ -11,6 +11,12 @@ from urllib.parse import urlparse
 app = FastAPI()
 
 
+@app.get("/")
+async def health():
+    """Health-check endpoint – pinged by cron-job.org to keep the free-tier instance awake."""
+    return {"status": "ok"}
+
+
 def validate_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -108,4 +114,5 @@ async def debug_cookies():
         
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
