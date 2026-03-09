@@ -10,6 +10,29 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
+COOKIES_PATH = "/app/cookies.txt"
+
+
+def write_cookies_from_env():
+    """Write cookies from YOUTUBE_COOKIES env var to disk. Called before server starts."""
+    cookies = os.environ.get("YOUTUBE_COOKIES", "").strip()
+    if cookies:
+        with open(COOKIES_PATH, "w") as f:
+            f.write(cookies + "\n")
+        print(f"Wrote cookies from env var ({len(cookies)} chars)")
+    elif os.path.exists(COOKIES_PATH):
+        print(f"No YOUTUBE_COOKIES env var; using existing {COOKIES_PATH}")
+    else:
+        print("Warning: No cookies available. YouTube downloads may fail.")
+
+
+def _cookies_opt():
+    """Return cookies option dict if cookies file exists."""
+    if os.path.exists(COOKIES_PATH):
+        return {"cookies": COOKIES_PATH}
+    return {}
+
+
 app = FastAPI()
 
 
@@ -34,8 +57,8 @@ async def get_info(url: str = Query(...)):
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "cookies": "/app/cookies.txt",          # ← must be here
-    }   
+        **_cookies_opt(),
+    }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             info = ydl.extract_info(url, download=False)
@@ -61,13 +84,13 @@ async def download(url: str = Query(...), format_id: str = Query(DEFAULT_FORMAT,
         "quiet": True,
         "no_warnings": True,
         "continuedl": True,
-        "cookies": "/app/cookies.txt",  # path inside container
+        **_cookies_opt(),
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "referer": "https://www.youtube.com/",
-        "sleep_interval": 3,          # seconds between requests
+        "sleep_interval": 3,
         "max_sleep_interval": 10,
     }
-   
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -106,7 +129,7 @@ async def thumbnail(url: str = Query(...)):
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "cookies": "/app/cookies.txt",
+        **_cookies_opt(),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -144,26 +167,65 @@ async def thumbnail(url: str = Query(...)):
     )
 
 
-@app.get("/debug-cookies")
-async def debug_cookies():
-    import os
-  
-    path = "/app/cookies.txt"
-    if not os.path.exists(path):
-        return {"status": "missing", "path": path}
-    try:
-        with open(path, "r") as f:
-            first_lines = f.readlines()[:5]
-        return {
+@app.get("/debug")
+async def debug():
+    """Full diagnostic: cookies, Node.js, bgutil plugin, and a test extraction."""
+    import subprocess
+    import importlib
+
+    result = {}
+
+    # 1. Cookies status
+    if os.path.exists(COOKIES_PATH):
+        result["cookies"] = {
             "status": "exists",
-            "size": os.path.getsize(path),
-            "first_lines": first_lines,
-            "readable": os.access(path, os.R_OK)
+            "size": os.path.getsize(COOKIES_PATH),
+            "source": "env" if os.environ.get("YOUTUBE_COOKIES") else "file",
         }
+    else:
+        result["cookies"] = {"status": "missing"}
+
+    # 2. Node.js
+    try:
+        node_ver = subprocess.check_output(["node", "--version"], stderr=subprocess.STDOUT, timeout=5).decode().strip()
+        result["nodejs"] = {"status": "ok", "version": node_ver}
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
-        
+        result["nodejs"] = {"status": "error", "detail": str(e)}
+
+    # 3. yt-dlp version
+    result["yt_dlp_version"] = yt_dlp.version.__version__
+
+    # 4. bgutil plugin loaded?
+    try:
+        from yt_dlp_plugins.extractor import getpot_bgutil
+        result["bgutil_plugin"] = {"status": "loaded"}
+    except ImportError as e:
+        result["bgutil_plugin"] = {"status": "not_loaded", "detail": str(e)}
+
+    # 5. Test extraction (metadata only, no download)
+    test_url = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+    ydl_opts = {
+        "quiet": False,
+        "no_warnings": False,
+        "verbose": True,
+        **_cookies_opt(),
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(test_url, download=False)
+            result["test_extract"] = {
+                "status": "ok",
+                "title": info.get("title"),
+                "formats_count": len(info.get("formats", [])),
+            }
+    except Exception as e:
+        result["test_extract"] = {"status": "error", "detail": str(e)}
+
+    return result
+
+
 if __name__ == "__main__":
     import uvicorn
+    write_cookies_from_env()
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
